@@ -1,0 +1,15 @@
+{
+    "model": {
+        "num_players": 2,
+        "max_actions_per_round": 5,
+        "hidden_size": 64,
+        "hidden_layers": 2,
+        "bet_sizing": [0.5, 1, 2]
+    },
+    "solutions": [
+        {
+            "abs": "/Volumes/T7/clustering/abs_200_400_600.bin",
+            "dir": "/Volumes/T7/experiments/experiments"
+        }
+    ]
+}

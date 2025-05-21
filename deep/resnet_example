@@ -1,0 +1,174 @@
+package rangenn
+
+import (
+	"encoding/gob"
+	"fmt"
+	"io"
+
+	"github.com/nlpodyssey/spago/ag"
+	"github.com/nlpodyssey/spago/mat"
+	"github.com/nlpodyssey/spago/mat/float"
+	"github.com/nlpodyssey/spago/nn"
+	"github.com/nlpodyssey/spago/nn/activation"
+	"github.com/nlpodyssey/spago/nn/dropout"
+	"github.com/nlpodyssey/spago/nn/linear"
+	"github.com/nlpodyssey/spago/nn/normalization/layernorm"
+	"github.com/pokerdroid/poker/deep"
+	"github.com/pokerdroid/poker/frand"
+
+	_ "github.com/nlpodyssey/spago/optimizers/adam"
+)
+
+func init() {
+	gob.Register(&Model{})
+
+}
+
+type StandardModule = nn.ModuleList[nn.StandardModel]
+
+type ModelParams struct {
+	NumPlayers         int `json:"num_players"`
+	MaxActionsPerRound int `json:"max_actions_per_round"`
+	Layers             int `json:"layers"`
+	HiddenSize         int `json:"hidden_size"`
+}
+
+// Model defines a neural network with residual connections
+type Model struct {
+	nn.Module
+	Layers     StandardModule
+	NumPlayers int
+}
+
+func NewFromFile[T float.DType](r io.Reader) (*Model, error) {
+	dec := gob.NewDecoder(r)
+	var m Model
+	if err := dec.Decode(&m); err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+type ResidualBlock struct {
+	nn.Module
+	PreNorm *PreNorm
+}
+
+type PreNorm struct {
+	nn.Module
+	Norm  *layernorm.Model
+	Block *Block
+}
+
+type Block struct {
+	nn.Module
+	Linear1    *linear.Model
+	Activation *activation.Model
+	Dropout    *dropout.Model
+	Linear2    *linear.Model
+}
+
+func NewModel[T float.DType](p ModelParams) *Model {
+	total, _ := EncodeFeatures[T](
+		uint8(p.NumPlayers),
+		uint8(p.MaxActionsPerRound),
+	)
+
+	// Input projection
+	layers := StandardModule{
+		linear.New[T](total, p.HiddenSize),
+		activation.New(activation.GELU),
+	}
+
+	// Residual blocks
+	for i := 0; i < p.Layers; i++ {
+		layers = append(layers, NewResidualBlock[T](p.HiddenSize))
+	}
+
+	// Output projection
+	layers = append(layers,
+		linear.New[T](p.HiddenSize, 13*13),
+		activation.New(activation.Softmax),
+	)
+
+	return &Model{Layers: layers, NumPlayers: p.NumPlayers}
+}
+
+func NewResidualBlock[T float.DType](dim int) *ResidualBlock {
+	return &ResidualBlock{
+		PreNorm: NewPreNorm[T](dim),
+	}
+}
+
+func NewPreNorm[T float.DType](dim int) *PreNorm {
+	return &PreNorm{
+		Norm:  layernorm.New[T](dim, 1e-12),
+		Block: NewBlock[T](dim),
+	}
+}
+
+func NewBlock[T float.DType](dim int) *Block {
+	return &Block{
+		Linear1:    linear.New[T](dim, dim*2),
+		Activation: activation.New(activation.GELU),
+		Dropout:    dropout.New(0.1),
+		Linear2:    linear.New[T](dim*2, dim),
+	}
+}
+
+// Forward for ResidualBlock
+func (m *ResidualBlock) Forward(xs ...mat.Tensor) []mat.Tensor {
+	ys := m.PreNorm.Forward(xs...)
+	out := make([]mat.Tensor, len(ys))
+	for i := range ys {
+		out[i] = ag.Add(ys[i], xs[i]) // Residual connection
+	}
+	return out
+}
+
+// Forward for PreNorm
+func (m *PreNorm) Forward(xs ...mat.Tensor) []mat.Tensor {
+	normalized := m.Norm.Forward(xs...)
+	return m.Block.Forward(normalized...)
+}
+
+// Forward for Block
+func (m *Block) Forward(xs ...mat.Tensor) []mat.Tensor {
+	// First linear layer
+	h1 := m.Linear1.Forward(xs...)
+	// Activation
+	h3 := m.Activation.Forward(h1...)
+	// Dropout
+	h4 := m.Dropout.Forward(h3...)
+	// Second linear layer
+	return m.Linear2.Forward(h4...)
+}
+
+// Forward performs the forward pass
+func (m *Model) Forward(xs ...mat.Tensor) (res []mat.Tensor) {
+	out := m.Layers.Forward(xs...)
+	return out
+}
+
+// InitRandom initializes the model weights
+func (m *Model) InitRandom(rng frand.Rand) *Model {
+	deep.ApplyXavierUniform(m, rng)
+	return m
+}
+
+// Save saves the model to a file
+func (m *Model) Save(w io.Writer) error {
+	// Create encoder and encode the model
+	enc := gob.NewEncoder(w)
+
+	if err := enc.Encode(m); err != nil {
+		return fmt.Errorf("failed to encode model: %w", err)
+	}
+
+	return nil
+}
+
+func (m *Model) Load(r io.Reader) error {
+	dec := gob.NewDecoder(r)
+	return dec.Decode(m)
+}

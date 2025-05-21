@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <title>{{.Name}}</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link href="/main.css" rel="stylesheet" />
+  </head>
+
+  <body>
+    {{if .Loaded}}
+    <div id="root"></div>
+    <script type="module" src="/main.js"></script>
+    <script>window.INITIAL_DATA = {{ .Data }};</script>
+    {{else}}
+    <div style="display: flex; justify-content: center; align-items: center; height: 100vh; font-family: 'Inter', sans-serif;">
+      <h1>Loading...</h1>
+    </div>
+    {{end}}
+  </body>
+</html>

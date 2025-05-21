@@ -1,0 +1,30 @@
+FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS builder
+
+# Install git and build essentials
+RUN apk add --no-cache \
+    git \
+    build-base
+
+WORKDIR /app
+
+# Copy go.mod and go.sum first to leverage Docker cache
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy the rest of the code
+COPY . .
+
+FROM --platform=$TARGETPLATFORM golang:1.22-alpine AS tester
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    build-base
+
+WORKDIR /app
+
+# Copy the downloaded dependencies and source code
+COPY --from=builder /go/pkg /go/pkg
+COPY --from=builder /app .
+
+# Run tests with verbose output and race detection
+CMD ["go", "test", "-v", "./float/f32"] 
